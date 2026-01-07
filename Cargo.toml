@@ -3,15 +3,30 @@ name = "sqnc"
 version = "0.1.0"
 edition = "2021"
 
+# Library for sequencer core logic
+[lib]
+name = "sqnc"
+path = "src/lib.rs"
+
+# Binary for standalone GUI app
 [[bin]]
 name = "sqnc"
 path = "src/main.rs"
 
 [dependencies]
-eframe = "0.29"
-egui = "0.29"
+# GUI (only needed for binary)
+eframe = { version = "0.28", optional = true }
+egui = { version = "0.28", optional = true }
+
+# Audio/MIDI (can be used by both lib and bin)
+cpal = "0.15"
 midir = "0.9"
+
+[features]
+default = ["gui"]
+gui = ["eframe", "egui"]
 
 [profile.release]
 opt-level = 2
 lto = "thin"
+

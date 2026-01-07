@@ -1,16 +1,15 @@
+#[cfg(feature = "gui")]
 use eframe::egui;
-use midir::{MidiOutput, MidiOutputConnection};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
 
-const NUM_STEPS: usize = 16;
+#[cfg(feature = "gui")]
+use sqnc::{Sequencer, AudioOutput, MidiOutputDevice, PlaybackEngine, PlaybackEvent, midi_note_name};
 
+#[cfg(feature = "gui")]
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([800.0, 400.0])
-            .with_title("SQNC - 16 Step Sequencer"),
+            .with_title("SQNC - Step Sequencer"),
         ..Default::default()
     };
 
@@ -21,206 +20,176 @@ fn main() -> Result<(), eframe::Error> {
     )
 }
 
+#[cfg(not(feature = "gui"))]
+fn main() {
+    eprintln!("This binary requires the 'gui' feature to be enabled");
+    std::process::exit(1);
+}
+
+#[cfg(feature = "gui")]
 struct SequencerApp {
-    // Sequencer state
-    steps: [bool; NUM_STEPS],
-    current_step: Arc<Mutex<usize>>,
-    bpm: f32,
-    note: u8,
-    is_playing: Arc<Mutex<bool>>,
+    sequencer: Sequencer,
+    audio_output: AudioOutput,
+    midi_output: MidiOutputDevice,
+    playback_engine: PlaybackEngine,
     
-    // MIDI
-    midi_output: Option<MidiOutputConnection>,
-    available_ports: Vec<String>,
+    // UI state
+    available_midi_ports: Vec<String>,
     selected_port: Option<usize>,
+    current_visual_step: usize,
 }
 
-impl Default for SequencerApp {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
+#[cfg(feature = "gui")]
 impl SequencerApp {
     fn new() -> Self {
-        let midi_out = MidiOutput::new("SQNC Output").ok();
-        let available_ports = if let Some(ref midi) = midi_out {
-            midi.ports()
-                .iter()
-                .filter_map(|p| midi.port_name(p).ok())
-                .collect()
-        } else {
-            vec![]
-        };
-
+        let available_midi_ports = MidiOutputDevice::available_ports();
+        
         Self {
-            steps: [true; NUM_STEPS],
-            current_step: Arc::new(Mutex::new(0)),
-            bpm: 120.0,
-            note: 60, // Middle C
-            is_playing: Arc::new(Mutex::new(false)),
-            midi_output: None,
-            available_ports,
+            sequencer: Sequencer::new(16, 1), // Start with 16x1 for compatibility
+            audio_output: AudioOutput::default(),
+            midi_output: MidiOutputDevice::new(),
+            playback_engine: PlaybackEngine::new(),
+            available_midi_ports,
             selected_port: None,
+            current_visual_step: 0,
         }
     }
 
-    fn connect_midi(&mut self, port_index: usize) {
-        if let Ok(midi_out) = MidiOutput::new("SQNC Output") {
-            let ports = midi_out.ports();
-            if let Some(port) = ports.get(port_index) {
-                if let Ok(connection) = midi_out.connect(port, "sqnc") {
-                    self.midi_output = Some(connection);
-                    self.selected_port = Some(port_index);
+    fn handle_playback_events(&mut self) {
+        let events = self.playback_engine.poll_events();
+        
+        for event in events {
+            match event {
+                PlaybackEvent::StepAdvanced(step) => {
+                    self.current_visual_step = step;
+                    self.sequencer.set_current_position(step);
+                }
+                PlaybackEvent::NoteOn(note, velocity) => {
+                    self.audio_output.trigger_note(note);
+                    let _ = self.midi_output.send_note_on(note, velocity);
+                }
+                PlaybackEvent::NoteOff(note) => {
+                    self.audio_output.stop_note();
+                    let _ = self.midi_output.send_note_off(note);
                 }
             }
         }
     }
 
-    fn send_note_on(&mut self, note: u8, velocity: u8) {
-        if let Some(ref mut conn) = self.midi_output {
-            let _ = conn.send(&[0x90, note, velocity]); // Note On, channel 0
-        }
+    fn start_playback(&mut self) {
+        let grid = self.sequencer.grid();
+        self.playback_engine.start(
+            self.sequencer.bpm(),
+            grid.width(),
+            grid.height(),
+            self.sequencer.grid_state().clone(),
+            self.sequencer.note(),
+        );
     }
 
-    fn send_note_off(&mut self, note: u8) {
-        if let Some(ref mut conn) = self.midi_output {
-            let _ = conn.send(&[0x80, note, 0]); // Note Off, channel 0
-        }
-    }
-
-    fn start_sequencer(&mut self) {
-        if *self.is_playing.lock().unwrap() {
-            return; // Already playing
-        }
-
-        *self.is_playing.lock().unwrap() = true;
-        *self.current_step.lock().unwrap() = 0;
-
-        let is_playing = Arc::clone(&self.is_playing);
-        let current_step = Arc::clone(&self.current_step);
-        let bpm = self.bpm;
-        let steps = self.steps;
-        let note = self.note;
-
-        // We need to handle MIDI in the main thread due to ownership,
-        // so we'll use a channel-based approach
-        thread::spawn(move || {
-            let step_duration = Duration::from_secs_f32(60.0 / bpm / 4.0); // 16th notes
-            let mut last_step_time = Instant::now();
-
-            while *is_playing.lock().unwrap() {
-                let now = Instant::now();
-                
-                if now.duration_since(last_step_time) >= step_duration {
-                    let step = {
-                        let mut step_lock = current_step.lock().unwrap();
-                        let current = *step_lock;
-                        *step_lock = (current + 1) % NUM_STEPS;
-                        current
-                    };
-
-                    // Signal that we need to trigger this step
-                    // In a real implementation, you'd use a channel here
-                    // For now, we'll just track timing
-                    
-                    last_step_time = now;
-                }
-
-                thread::sleep(Duration::from_millis(1));
-            }
-        });
-    }
-
-    fn stop_sequencer(&mut self) {
-        *self.is_playing.lock().unwrap() = false;
-        // Send note off just in case
-        self.send_note_off(self.note);
+    fn stop_playback(&mut self) {
+        self.playback_engine.stop();
+        self.audio_output.stop_note();
+        let _ = self.midi_output.send_note_off(self.sequencer.note());
     }
 }
 
+#[cfg(feature = "gui")]
 impl eframe::App for SequencerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Request continuous repaints for animation
         ctx.request_repaint();
+        
+        self.handle_playback_events();
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("SQNC - 16 Step Sequencer");
+            ui.heading("SQNC - Step Sequencer");
             ui.add_space(10.0);
 
             // MIDI Port Selection
+            let mut selected_port_changed = None;
             ui.horizontal(|ui| {
                 ui.label("MIDI Output:");
-                if self.available_ports.is_empty() {
+                if self.available_midi_ports.is_empty() {
                     ui.label("No MIDI ports available");
                 } else {
                     egui::ComboBox::from_label("")
                         .selected_text(
                             self.selected_port
-                                .map(|i| self.available_ports[i].as_str())
+                                .map(|i| self.available_midi_ports[i].as_str())
                                 .unwrap_or("Select port..."),
                         )
                         .show_ui(ui, |ui| {
-                            for (i, port_name) in self.available_ports.iter().enumerate() {
+                            for (i, port_name) in self.available_midi_ports.iter().enumerate() {
                                 if ui.selectable_label(
                                     self.selected_port == Some(i),
                                     port_name,
                                 ).clicked() {
-                                    self.connect_midi(i);
+                                    selected_port_changed = Some(i);
                                 }
                             }
                         });
                 }
             });
+            
+            if let Some(port_idx) = selected_port_changed {
+                if let Ok(()) = self.midi_output.connect(port_idx) {
+                    self.selected_port = Some(port_idx);
+                }
+            }
 
             ui.add_space(10.0);
 
             // Transport controls
             ui.horizontal(|ui| {
-                let is_playing = *self.is_playing.lock().unwrap();
+                let is_playing = self.playback_engine.is_running();
                 
                 if is_playing {
                     if ui.button("⏸ Stop").clicked() {
-                        self.stop_sequencer();
+                        self.stop_playback();
                     }
                 } else {
                     if ui.button("▶ Play").clicked() {
-                        self.start_sequencer();
+                        self.start_playback();
                     }
                 }
 
                 ui.add_space(20.0);
 
                 ui.label("BPM:");
-                ui.add(egui::Slider::new(&mut self.bpm, 40.0..=240.0).step_by(1.0));
+                let mut bpm = self.sequencer.bpm();
+                if ui.add(egui::Slider::new(&mut bpm, 40.0..=240.0).step_by(1.0)).changed() {
+                    self.sequencer.set_bpm(bpm);
+                }
 
                 ui.add_space(20.0);
 
                 ui.label("Note:");
-                ui.add(egui::Slider::new(&mut self.note, 0..=127).step_by(1.0));
-                ui.label(format!("({})", midi_note_name(self.note)));
+                let mut note = self.sequencer.note();
+                if ui.add(egui::Slider::new(&mut note, 0..=127).step_by(1.0)).changed() {
+                    self.sequencer.set_note(note);
+                }
+                ui.label(format!("({})", midi_note_name(note)));
             });
 
             ui.add_space(20.0);
 
-            // Step grid
+            // Step grid (16 steps in 2 rows of 8)
             ui.label("Steps:");
             ui.add_space(5.0);
 
-            let current = *self.current_step.lock().unwrap();
-            let is_playing = *self.is_playing.lock().unwrap();
+            let is_playing = self.playback_engine.is_running();
 
-            // First row of 8 steps
+            // First row
             ui.horizontal(|ui| {
                 for i in 0..8 {
-                    let is_current = is_playing && current == i;
+                    let is_current = is_playing && self.current_visual_step == i;
                     let button_text = if is_current {
                         format!("● {}", i + 1)
                     } else {
                         format!("{}", i + 1)
                     };
 
-                    let mut step_enabled = self.steps[i];
+                    let step_enabled = self.sequencer.grid_mut().get(i, 0);
                     
                     let button = egui::Button::new(button_text)
                         .min_size(egui::vec2(80.0, 60.0))
@@ -233,25 +202,25 @@ impl eframe::App for SequencerApp {
                         });
 
                     if ui.add(button).clicked() {
-                        step_enabled = !step_enabled;
-                        self.steps[i] = step_enabled;
+                        self.sequencer.grid_mut().toggle(i, 0);
+                        self.sequencer.update_shared_grid();
                     }
                 }
             });
 
             ui.add_space(5.0);
 
-            // Second row of 8 steps
+            // Second row
             ui.horizontal(|ui| {
                 for i in 8..16 {
-                    let is_current = is_playing && current == i;
+                    let is_current = is_playing && self.current_visual_step == i;
                     let button_text = if is_current {
                         format!("● {}", i + 1)
                     } else {
                         format!("{}", i + 1)
                     };
 
-                    let mut step_enabled = self.steps[i];
+                    let step_enabled = self.sequencer.grid_mut().get(i, 0);
                     
                     let button = egui::Button::new(button_text)
                         .min_size(egui::vec2(80.0, 60.0))
@@ -264,8 +233,8 @@ impl eframe::App for SequencerApp {
                         });
 
                     if ui.add(button).clicked() {
-                        step_enabled = !step_enabled;
-                        self.steps[i] = step_enabled;
+                        self.sequencer.grid_mut().toggle(i, 0);
+                        self.sequencer.update_shared_grid();
                     }
                 }
             });
@@ -275,30 +244,13 @@ impl eframe::App for SequencerApp {
             // Info
             ui.separator();
             ui.label("Click steps to enable/disable them");
-            if self.midi_output.is_none() {
+            if !self.midi_output.is_connected() {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    "⚠ No MIDI output connected - select a port above",
+                    "⚠ No MIDI output connected - audio playback only",
                 );
             }
         });
-
-        // Handle step triggering with MIDI output
-        // This is a simplified version - in production you'd want better timing
-        let is_playing = *self.is_playing.lock().unwrap();
-        if is_playing {
-            let current = *self.current_step.lock().unwrap();
-            if self.steps[current] {
-                // Note: This is a simplified trigger detection
-                // A better approach would use a channel from the sequencer thread
-            }
-        }
     }
 }
 
-fn midi_note_name(note: u8) -> String {
-    let note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-    let octave = (note / 12) as i32 - 1;
-    let note_index = (note % 12) as usize;
-    format!("{}{}", note_names[note_index], octave)
-}
