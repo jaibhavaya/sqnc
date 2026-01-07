@@ -1,0 +1,17 @@
+[package]
+name = "sqnc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sqnc"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+midir = "0.9"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
