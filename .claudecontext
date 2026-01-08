@@ -1,0 +1,10 @@
+# Project Context
+
+## Development Environment
+- Operating System: Linux Mint
+- System packages use apt/apt-get (Debian/Ubuntu-based)
+
+## Project Information
+- Project Name: sqnc
+- Type: Rust audio/MIDI sequencer with GUI
+- Originally developed on macOS, now being run on Linux Mint

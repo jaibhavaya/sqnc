@@ -2,13 +2,15 @@
 use eframe::egui;
 
 #[cfg(feature = "gui")]
-use sqnc::{Sequencer, AudioOutput, MidiOutputDevice, PlaybackEngine, PlaybackEvent, midi_note_name};
+use sqnc::{
+    midi_note_name, AudioOutput, MidiOutputDevice, PlaybackEngine, PlaybackEvent, Sequencer,
+};
 
 #[cfg(feature = "gui")]
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([800.0, 400.0])
+            .with_inner_size([800.0, 800.0])
             .with_title("SQNC - Step Sequencer"),
         ..Default::default()
     };
@@ -32,7 +34,7 @@ struct SequencerApp {
     audio_output: AudioOutput,
     midi_output: MidiOutputDevice,
     playback_engine: PlaybackEngine,
-    
+
     // UI state
     available_midi_ports: Vec<String>,
     selected_port: Option<usize>,
@@ -43,9 +45,9 @@ struct SequencerApp {
 impl SequencerApp {
     fn new() -> Self {
         let available_midi_ports = MidiOutputDevice::available_ports();
-        
+
         Self {
-            sequencer: Sequencer::new(16, 1), // Start with 16x1 for compatibility
+            sequencer: Sequencer::new(8, 8), // Start with 16x1 for compatibility
             audio_output: AudioOutput::default(),
             midi_output: MidiOutputDevice::new(),
             playback_engine: PlaybackEngine::new(),
@@ -57,7 +59,7 @@ impl SequencerApp {
 
     fn handle_playback_events(&mut self) {
         let events = self.playback_engine.poll_events();
-        
+
         for event in events {
             match event {
                 PlaybackEvent::StepAdvanced(step) => {
@@ -98,7 +100,7 @@ impl SequencerApp {
 impl eframe::App for SequencerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint();
-        
+
         self.handle_playback_events();
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -120,17 +122,17 @@ impl eframe::App for SequencerApp {
                         )
                         .show_ui(ui, |ui| {
                             for (i, port_name) in self.available_midi_ports.iter().enumerate() {
-                                if ui.selectable_label(
-                                    self.selected_port == Some(i),
-                                    port_name,
-                                ).clicked() {
+                                if ui
+                                    .selectable_label(self.selected_port == Some(i), port_name)
+                                    .clicked()
+                                {
                                     selected_port_changed = Some(i);
                                 }
                             }
                         });
                 }
             });
-            
+
             if let Some(port_idx) = selected_port_changed {
                 if let Ok(()) = self.midi_output.connect(port_idx) {
                     self.selected_port = Some(port_idx);
@@ -142,7 +144,7 @@ impl eframe::App for SequencerApp {
             // Transport controls
             ui.horizontal(|ui| {
                 let is_playing = self.playback_engine.is_running();
-                
+
                 if is_playing {
                     if ui.button("⏸ Stop").clicked() {
                         self.stop_playback();
@@ -157,7 +159,10 @@ impl eframe::App for SequencerApp {
 
                 ui.label("BPM:");
                 let mut bpm = self.sequencer.bpm();
-                if ui.add(egui::Slider::new(&mut bpm, 40.0..=240.0).step_by(1.0)).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut bpm, 40.0..=240.0).step_by(1.0))
+                    .changed()
+                {
                     self.sequencer.set_bpm(bpm);
                 }
 
@@ -165,7 +170,10 @@ impl eframe::App for SequencerApp {
 
                 ui.label("Note:");
                 let mut note = self.sequencer.note();
-                if ui.add(egui::Slider::new(&mut note, 0..=127).step_by(1.0)).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut note, 0..=127).step_by(1.0))
+                    .changed()
+                {
                     self.sequencer.set_note(note);
                 }
                 ui.label(format!("({})", midi_note_name(note)));
@@ -179,67 +187,38 @@ impl eframe::App for SequencerApp {
 
             let is_playing = self.playback_engine.is_running();
 
-            // First row
             ui.horizontal(|ui| {
-                for i in 0..8 {
-                    let is_current = is_playing && self.current_visual_step == i;
-                    let button_text = if is_current {
-                        format!("● {}", i + 1)
-                    } else {
-                        format!("{}", i + 1)
-                    };
+                for i in 1..8 {
+                    ui.vertical(|ui| {
+                        for j in 1..8 {
+                            let is_current = is_playing && self.current_visual_step == i;
+                            let number = i * j
+                            let button_text = if is_current {
+                                format!("● {}", number)
+                            } else {
+                                format!("{}", number)
+                            };
 
-                    let step_enabled = self.sequencer.grid_mut().get(i, 0);
-                    
-                    let button = egui::Button::new(button_text)
-                        .min_size(egui::vec2(80.0, 60.0))
-                        .fill(if is_current {
-                            egui::Color32::from_rgb(100, 200, 100)
-                        } else if step_enabled {
-                            egui::Color32::from_rgb(60, 60, 200)
-                        } else {
-                            egui::Color32::from_rgb(40, 40, 40)
-                        });
+                            let step_enabled = self.sequencer.grid_mut().get(i, j);
 
-                    if ui.add(button).clicked() {
-                        self.sequencer.grid_mut().toggle(i, 0);
-                        self.sequencer.update_shared_grid();
-                    }
+                            let button = egui::Button::new(button_text)
+                                .min_size(egui::vec2(80.0, 60.0))
+                                .fill(if is_current {
+                                    egui::Color32::from_rgb(100, 200, 100)
+                                } else if step_enabled {
+                                    egui::Color32::from_rgb(60, 60, 200)
+                                } else {
+                                    egui::Color32::from_rgb(40, 40, 40)
+                                });
+
+                            if ui.add(button).clicked() {
+                                self.sequencer.grid_mut().toggle(i, j);
+                                self.sequencer.update_grid_state();
+                            }
+                        }
+                    });
                 }
             });
-
-            ui.add_space(5.0);
-
-            // Second row
-            ui.horizontal(|ui| {
-                for i in 8..16 {
-                    let is_current = is_playing && self.current_visual_step == i;
-                    let button_text = if is_current {
-                        format!("● {}", i + 1)
-                    } else {
-                        format!("{}", i + 1)
-                    };
-
-                    let step_enabled = self.sequencer.grid_mut().get(i, 0);
-                    
-                    let button = egui::Button::new(button_text)
-                        .min_size(egui::vec2(80.0, 60.0))
-                        .fill(if is_current {
-                            egui::Color32::from_rgb(100, 200, 100)
-                        } else if step_enabled {
-                            egui::Color32::from_rgb(60, 60, 200)
-                        } else {
-                            egui::Color32::from_rgb(40, 40, 40)
-                        });
-
-                    if ui.add(button).clicked() {
-                        self.sequencer.grid_mut().toggle(i, 0);
-                        self.sequencer.update_shared_grid();
-                    }
-                }
-            });
-
-            ui.add_space(20.0);
 
             // Info
             ui.separator();
@@ -253,4 +232,3 @@ impl eframe::App for SequencerApp {
         });
     }
 }
-

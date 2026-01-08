@@ -1,14 +1,14 @@
+use std::sync::mpsc::{channel, Receiver, Sender};
 /// Playback engine - coordinates timing and triggers
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum PlaybackEvent {
     StepAdvanced(usize),
-    NoteOn(u8, u8),  // note, velocity
-    NoteOff(u8),     // note
+    NoteOn(u8, u8), // note, velocity
+    NoteOff(u8),    // note
 }
 
 pub struct PlaybackEngine {
@@ -20,7 +20,7 @@ pub struct PlaybackEngine {
 impl PlaybackEngine {
     pub fn new() -> Self {
         let (sender, receiver) = channel();
-        
+
         Self {
             sender,
             receiver,
@@ -33,7 +33,7 @@ impl PlaybackEngine {
         bpm: f32,
         grid_width: usize,
         grid_height: usize,
-        grid_state: Arc<Mutex<Vec<bool>>>,
+        grid_state: Arc<Mutex<Vec<Vec<bool>>>>,
         note: u8,
     ) {
         if *self.is_running.lock().unwrap() {
@@ -49,7 +49,7 @@ impl PlaybackEngine {
             let step_duration = Duration::from_secs_f32(60.0 / bpm / 4.0);
             let note_duration = step_duration / 2;
             let total_steps = grid_width * grid_height;
-            let mut current_step = 0;
+            let mut current_step = vec![0, 0];
             let mut last_step_time = Instant::now();
 
             while *is_running.lock().unwrap() {
@@ -108,4 +108,3 @@ impl Default for PlaybackEngine {
         Self::new()
     }
 }
-

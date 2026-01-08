@@ -1,6 +1,5 @@
 /// Core sequencer logic - grid state and step management
 /// This is grid-agnostic and can work with any grid size
-
 use std::sync::{Arc, Mutex};
 pub mod playback;
 
@@ -29,7 +28,11 @@ impl Grid {
     }
 
     pub fn get(&self, x: usize, y: usize) -> bool {
-        self.cells.get(y).and_then(|row| row.get(x)).copied().unwrap_or(false)
+        self.cells
+            .get(y)
+            .and_then(|row| row.get(x))
+            .copied()
+            .unwrap_or(false)
     }
 
     pub fn set(&mut self, x: usize, y: usize, value: bool) {
@@ -60,16 +63,11 @@ impl Grid {
             }
         }
     }
-    
-    /// Get a flattened view of the grid (useful for linear playback)
-    pub fn as_linear(&self) -> Vec<bool> {
-        self.cells.iter().flat_map(|row| row.iter().copied()).collect()
-    }
 }
 
 pub struct Sequencer {
     grid: Grid,
-    grid_state: Arc<Mutex<Vec<bool>>>,
+    grid_state: Arc<Mutex<Vec<Vec<bool>>>>,
     current_position: usize,
     bpm: f32,
     note: u8,
@@ -79,7 +77,7 @@ pub struct Sequencer {
 impl Sequencer {
     pub fn new(width: usize, height: usize) -> Self {
         let grid = Grid::new(width, height);
-        let initial_state = grid.as_linear();
+        let initial_state = grid.cells.clone();
 
         Self {
             grid: Grid::new(width, height),
@@ -95,7 +93,7 @@ impl Sequencer {
         &self.grid
     }
 
-    pub fn grid_state(&self) -> &Arc<Mutex<Vec<bool>>> {
+    pub fn grid_state(&self) -> &Arc<Mutex<Vec<Vec<bool>>>> {
         &self.grid_state
     }
 
@@ -155,7 +153,7 @@ impl Sequencer {
         if self.current_position >= total_steps {
             return false;
         }
-        
+
         let x = self.current_position % self.grid.width();
         let y = self.current_position / self.grid.width();
         self.grid.get(x, y)
@@ -169,9 +167,9 @@ impl Sequencer {
         (1000.0 / steps_per_second) as u64
     }
 
-    pub fn update_shared_grid(&mut self) {
+    pub fn update_grid_state(&mut self) {
         let mut shared = self.grid_state.lock().unwrap();
-        *shared = self.grid.as_linear();
+        *shared = self.grid.cells.clone();
     }
 }
 
@@ -202,4 +200,3 @@ mod tests {
         assert_eq!(seq.current_position(), 1);
     }
 }
-
